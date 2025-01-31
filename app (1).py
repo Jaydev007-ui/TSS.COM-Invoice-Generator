@@ -1,19 +1,31 @@
 import streamlit as st
-import firebase_admin
-from firebase_admin import credentials, firestore, auth
-import tempfile
+import json
 import os
 from datetime import datetime
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from io import BytesIO
 
-# Initialize Firebase
-if not firebase_admin._apps:
-    cred = credentials.Certificate("path/to/your/serviceAccountKey.json")
-    firebase_admin.initialize_app(cred)
+# File paths
+USERS_FILE = "users.json"
+INVOICES_FILE = "invoices.json"
+PROFILES_FILE = "profiles.json"
 
-db = firestore.client()
+# Helper functions
+def load_data(file_path):
+    if os.path.exists(file_path):
+        with open(file_path, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_data(data, file_path):
+    with open(file_path, "w") as f:
+        json.dump(data, f)
+
+# Load data
+users = load_data(USERS_FILE)
+invoices = load_data(INVOICES_FILE)
+profiles = load_data(PROFILES_FILE)
 
 def main():
     st.set_page_config(page_title="TSS.COM Invoice Generator", page_icon=":receipt:", layout="wide")
@@ -34,30 +46,26 @@ def show_login_signup():
         username = st.text_input("Username")
         password = st.text_input("Password", type="password")
         if st.button("Login"):
-            try:
-                user = auth.get_user_by_email(f"{username}@tss.com")
-                # In a real app, you'd verify the password here
-                st.session_state.user = user
+            if username in users and users[username] == password:
+                st.session_state.user = username
                 st.success("Logged in successfully!")
                 st.experimental_rerun()
-            except:
+            else:
                 st.error("Invalid credentials")
 
     with tab2:
         new_username = st.text_input("New Username")
         new_password = st.text_input("New Password", type="password")
         if st.button("Sign Up"):
-            try:
-                user = auth.create_user(
-                    email=f"{new_username}@tss.com",
-                    password=new_password
-                )
+            if new_username not in users:
+                users[new_username] = new_password
+                save_data(users, USERS_FILE)
                 st.success("Account created successfully! Please log in.")
-            except:
-                st.error("Failed to create account")
+            else:
+                st.error("Username already exists")
 
 def show_main_app():
-    st.sidebar.title(f"Welcome, {st.session_state.user.email.split('@')[0]}!")
+    st.sidebar.title(f"Welcome, {st.session_state.user}!")
     if st.sidebar.button("Logout"):
         st.session_state.user = None
         st.experimental_rerun()
@@ -75,26 +83,22 @@ def show_main_app():
 
 def show_profile():
     st.header("Profile")
-    user_ref = db.collection('users').document(st.session_state.user.uid)
-    user_data = user_ref.get().to_dict()
+    user_profile = profiles.get(st.session_state.user, {})
 
-    if user_data is None:
-        user_data = {}
-
-    name = st.text_input("Name", value=user_data.get('name', ''))
-    department = st.text_input("Department", value=user_data.get('department', ''))
+    name = st.text_input("Name", value=user_profile.get('name', ''))
+    department = st.text_input("Department", value=user_profile.get('department', ''))
     photo = st.file_uploader("Profile Photo", type=['png', 'jpg', 'jpeg'])
 
     if st.button("Save Profile"):
-        update_data = {
+        profiles[st.session_state.user] = {
             'name': name,
-            'department': department
+            'department': department,
         }
         if photo:
-            # In a real app, you'd upload this to cloud storage and save the URL
-            update_data['photo_url'] = "photo_url_placeholder"
-
-        user_ref.set(update_data, merge=True)
+            # In a real app, you'd save the photo to a file and store the path
+            profiles[st.session_state.user]['photo'] = photo.name
+        
+        save_data(profiles, PROFILES_FILE)
         st.success("Profile updated successfully!")
 
 def generate_invoice():
@@ -126,10 +130,11 @@ def generate_invoice():
             "invoice_date": invoice_date.isoformat(),
             "due_date": due_date.isoformat(),
             "items": items,
-            "created_by": st.session_state.user.uid,
+            "created_by": st.session_state.user,
             "created_at": datetime.now().isoformat()
         }
-        db.collection('invoices').add(invoice_data)
+        invoices[invoice_number] = invoice_data
+        save_data(invoices, INVOICES_FILE)
         st.success("Invoice generated successfully!")
         
         # Generate PDF
@@ -143,11 +148,9 @@ def generate_invoice():
 
 def view_invoices():
     st.header("View Invoices")
-    invoices = db.collection('invoices').get()
 
-    for invoice in invoices:
-        invoice_data = invoice.to_dict()
-        st.subheader(f"Invoice {invoice_data['invoice_number']}")
+    for invoice_number, invoice_data in invoices.items():
+        st.subheader(f"Invoice {invoice_number}")
         st.write(f"Client: {invoice_data['client_name']}")
         st.write(f"Date: {invoice_data['invoice_date']}")
         st.write(f"Due Date: {invoice_data['due_date']}")
@@ -160,7 +163,7 @@ def view_invoices():
         st.download_button(
             label="Download Invoice PDF",
             data=pdf_buffer,
-            file_name=f"invoice_{invoice_data['invoice_number']}.pdf",
+            file_name=f"invoice_{invoice_number}.pdf",
             mime="application/pdf"
         )
 
