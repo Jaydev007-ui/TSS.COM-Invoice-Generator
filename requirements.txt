@@ -1,0 +1,5 @@
+streamlit==1.22.0
+firebase-admin==6.1.0
+reportlab==3.6.12
+Pillow==9.5.0
+
