@@ -1,0 +1,8 @@
+streamlit
+numpy
+tensorflow
+Pillow
+scikit-learn
+opencv-python
+streamlit-webrtc
+
