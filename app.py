@@ -12,6 +12,8 @@ from tensorflow.keras.models import Model
 import cv2
 import base64
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
+import av
+from fine_letter import generate_fine_letter
 
 # =====================================
 # APP CONFIGURATION
@@ -217,7 +219,68 @@ def main():
         handle_alert_history()
 
 def handle_employee_management(embedding_model):
-    # ... (keep the existing employee management code)
+    st.markdown("## 👥 Employee Management")
+    
+    if 'employees' not in st.session_state:
+        st.session_state.employees = {}
+    
+    with st.form("employee_form", clear_on_submit=True):
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            st.subheader("📝 Employee Details")
+            name = st.text_input("Full Name", placeholder="John Doe")
+            phone = st.text_input("Phone Number", placeholder="+91 9876543210")
+            email = st.text_input("Email Address", placeholder="john@company.com")
+            address = st.text_area("Residential Address", placeholder="123 Main St, City")
+        with col2:
+            st.subheader("📸 Photo Upload")
+            photo = st.file_uploader("Upload employee photo", type=["jpg", "jpeg", "png"])
+            if photo:
+                image = Image.open(photo)
+                st.image(image, caption="Employee Photo", use_column_width=True)
+        
+        if st.form_submit_button("➕ Add Employee"):
+            if not all([name, phone, email, address, photo]):
+                st.error("All fields are required!")
+            else:
+                try:
+                    img = Image.open(photo).convert('RGB')
+                    img_resized = img.resize((224, 224))
+                    img_array = np.array(img_resized)
+                    
+                    # Generate embedding
+                    face_array = np.expand_dims(img_array, axis=0).astype('float32') / 127.5 - 1
+                    embedding = embedding_model.predict(face_array).flatten()
+                    
+                    emp_id = f"EMP{len(st.session_state.employees)+1:03d}"
+                    st.session_state.employees[emp_id] = {
+                        "name": name,
+                        "phone": phone,
+                        "email": email,
+                        "address": address,
+                        "photo": photo.getvalue(),
+                        "embedding": embedding
+                    }
+                    st.success(f"Employee {emp_id} added successfully!")
+                except Exception as e:
+                    st.error(f"Error processing photo: {e}")
+
+    st.markdown("---")
+    st.subheader("📋 Registered Employees")
+    if not st.session_state.employees:
+        st.info("No employees registered")
+    else:
+        for emp_id, details in st.session_state.employees.items():
+            with st.expander(f"{emp_id} - {details['name']}"):
+                col1, col2 = st.columns([1,3])
+                with col1:
+                    st.image(Image.open(io.BytesIO(details['photo'])), width=150)
+                with col2:
+                    st.markdown(f"""
+                    **📞 Phone:** `{details['phone']}`  
+                    **📧 Email:** `{details['email']}`  
+                    **🏠 Address:** `{details['address']}`
+                    """)
 
 def handle_camera_stream(spitnet_model, embedding_model):
     st.markdown("## 📡 Live Monitoring")
@@ -263,10 +326,59 @@ def handle_camera_stream(spitnet_model, embedding_model):
                 st.error(f"Error accessing CCTV camera: {str(e)}")
 
 def handle_alert_history():
-    # ... (keep the existing alert history code)
+    st.markdown("## 🚨 Incident History")
+    
+    if 'alerts' not in st.session_state or not st.session_state.alerts:
+        st.info("No alerts recorded")
+    else:
+        for alert in reversed(st.session_state.alerts):
+            with st.expander(f"Alert - {alert['timestamp']}", expanded=True):
+                col1, col2 = st.columns([1, 3])
+                with col1:
+                    st.image(alert['image'], caption="Incident Capture", width=300)
+                with col2:
+                    emp = alert['details']
+                    st.markdown(f"""
+                    **🆔 Employee ID:** `{alert['emp_id']}`  
+                    **👤 Name:** `{emp['name']}`  
+                    **📞 Phone:** `{emp['phone']}`  
+                    **📧 Email:** `{emp['email']}`  
+                    **🔍 Match Confidence:** `{alert['similarity']*100:.2f}%`
+                    """)
+                    
+                    # Add download button for fine letter
+                    st.download_button(
+                        label="📄 Download Fine Notice",
+                        data=generate_fine_letter(alert).encode('utf-8'),
+                        file_name=f"fine_notice_{alert['emp_id']}_{alert['timestamp']}.html",
+                        mime="text/html",
+                        help="Download official fine notice in HTML format"
+                    )
+                st.markdown("---")
 
 def handle_spitting_alert(face_array, face_img, embedding_model):
-    # ... (keep the existing spitting alert handling code)
+    current_embedding = embedding_model.predict(face_array).flatten()
+    max_sim = 0
+    matched_emp = None
+    
+    for emp_id, emp in st.session_state.employees.items():
+        similarity = cosine_similarity([current_embedding], [emp['embedding']])[0][0]
+        if similarity > max_sim:
+            max_sim = similarity
+            matched_emp = emp_id
+    
+    if max_sim > 0.6:
+        emp = st.session_state.employees[matched_emp]
+        alert = {
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "emp_id": matched_emp,
+            "details": emp,
+            "similarity": max_sim,
+            "image": face_img
+        }
+        if 'alerts' not in st.session_state:
+            st.session_state.alerts = []
+        st.session_state.alerts.append(alert)
 
 if __name__ == "__main__":
     main()
